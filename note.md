@@ -1,0 +1,2 @@
+- [Custom Streaming DataSource の例](https://github.com/phatak-dev/spark-3.0-examples/blob/master/src/main/scala/com/madhukaraphatak/spark/sources/datasourcev2/streaming/SimpleStreamingDataSource.scala)
+- [Kafka の実装](https://github.com/apache/spark/blob/master/external/kafka-0-10-sql/src/main/scala/org/apache/spark/sql/kafka010/KafkaSourceProvider.scala)
