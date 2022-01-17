@@ -10,20 +10,29 @@ object Main {
       .appName("streaming example")
       .getOrCreate()
 
-    val streamingDf = sparkSession.
-      readStream.
-      format("com.github.yoda_mon.spark_gtfs_rt")
+    import sparkSession.implicits._
+
+    val streamingDf = sparkSession.readStream
+      .format("com.github.yoda_mon.spark_gtfs_rt")
       .load()
 
+    streamingDf.printSchema()
 
-
-    val query = streamingDf.writeStream
+    val query1 = streamingDf.writeStream
       .format("console")
-      .queryName("simple_source")
-      .trigger(Trigger.ProcessingTime("5 seconds"))
+      .queryName("no operation")
+      .trigger(Trigger.ProcessingTime("60 seconds"))
       .outputMode(OutputMode.Append())
 
-    query.start().awaitTermination()
+    val query2 = streamingDf.where("id == '223'")
+      .writeStream
+      .format("console")
+      .queryName("select")
+      .trigger(Trigger.ProcessingTime("60 seconds"))
+      .outputMode(OutputMode.Update())
+
+    // query1.start()
+    query2.start().awaitTermination()
 
   }
 }

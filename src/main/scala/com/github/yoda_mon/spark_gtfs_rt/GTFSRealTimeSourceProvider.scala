@@ -6,53 +6,39 @@ import org.apache.spark.sql.connector.catalog.{SupportsRead, Table, TableCapabil
 import org.apache.spark.sql.connector.expressions.Transform
 import org.apache.spark.sql.connector.read.{InputPartition, PartitionReader, PartitionReaderFactory, Scan, ScanBuilder}
 import org.apache.spark.sql.connector.read.streaming.{MicroBatchStream, Offset}
-import org.apache.spark.sql.types.{StringType, StructField, StructType}
+import org.apache.spark.sql.types.StructType
 import org.apache.spark.sql.util.CaseInsensitiveStringMap
-import org.apache.spark.unsafe.types.UTF8String
 
 import java.net.URL
 import java.util
 import scala.jdk.CollectionConverters._
 
-/*
-  * Default source should some kind of relation provider
-  */
 class DefaultSource extends TableProvider {
 
   override def inferSchema(caseInsensitiveStringMap: CaseInsensitiveStringMap): StructType =
     getTable(null, Array.empty[Transform], caseInsensitiveStringMap.asCaseSensitiveMap()).schema()
 
-  override def getTable(structType: StructType, partitioning: Array[Transform], properties: util.Map[String, String]): Table =
-    new SimpleStreamingTable()
+  override def getTable(structType: StructType, partitioning: Array[Transform],
+                        properties: util.Map[String, String]): Table =
+    new GTFSRealTimeTable()
 }
 
-/*
-  Defines Read Support and Initial Schema
- */
-class SimpleStreamingTable extends Table with SupportsRead {
+class GTFSRealTimeTable extends Table with SupportsRead {
   override def name(): String = this.getClass.toString
 
-  override def schema(): StructType = StructType(Array(StructField("value", StringType)))
+  override def schema(): StructType = VehiclePositionSchema.getSchema()
 
   override def capabilities(): util.Set[TableCapability] = Set(TableCapability.MICRO_BATCH_READ).asJava
 
   override def newScanBuilder(options: CaseInsensitiveStringMap): ScanBuilder = new SimpleScanBuilder()
 }
 
-/*
-   Scan object with no mixins
- */
 class SimpleScanBuilder extends ScanBuilder {
   override def build(): Scan = new SimpleScan
 }
 
-/*
-    Batch Reading Support
-    The schema is repeated here as it can change after column pruning etc
- */
-
 class SimpleScan extends Scan {
-  override def readSchema(): StructType = StructType(Array(StructField("value", StringType)))
+  override def readSchema(): StructType = VehiclePositionSchema.getSchema()
 
   override def toMicroBatchStream(checkpointLocation: String): MicroBatchStream = new SimpleMicroBatchStream()
 }
@@ -83,16 +69,12 @@ class SimpleMicroBatchStream extends MicroBatchStream {
 }
 
 
-// simple class to organise the partition
 class SimplePartition extends InputPartition
 
-// reader factory
 class GTFSRTPartitionReaderFactory extends PartitionReaderFactory {
   override def createReader(partition: InputPartition): PartitionReader[InternalRow] = new GTFSRTPartitionReader
 }
 
-
-// parathion reader
 class GTFSRTPartitionReader extends PartitionReader[InternalRow] {
 
   var iterator: Iterator[FeedEntity] = null
@@ -110,14 +92,12 @@ class GTFSRTPartitionReader extends PartitionReader[InternalRow] {
   def get: InternalRow = {
     val entity = iterator.next()
     val row = if (entity.hasVehicle) {
-      InternalRow(entity.getVehicle)
+      val vp = VehiclePositionConverter(entity.getVehicle).toSeq
+      InternalRow.fromSeq(vp)
     } else {
       InternalRow()
     }
     row
   }
-
   def close(): Unit = {}
 }
-
-//class SimpleSourceProvider {}
