@@ -4,7 +4,7 @@ import com.google.transit.realtime.GtfsRealtime.{FeedEntity, FeedMessage}
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.connector.catalog.{SupportsRead, Table, TableCapability, TableProvider}
 import org.apache.spark.sql.connector.expressions.Transform
-import org.apache.spark.sql.connector.read.{InputPartition, PartitionReader, PartitionReaderFactory, Scan, ScanBuilder}
+import org.apache.spark.sql.connector.read.{Batch, InputPartition, PartitionReader, PartitionReaderFactory, Scan, ScanBuilder}
 import org.apache.spark.sql.connector.read.streaming.{MicroBatchStream, Offset}
 import org.apache.spark.sql.types.StructType
 import org.apache.spark.sql.util.CaseInsensitiveStringMap
@@ -28,26 +28,31 @@ class GTFSRealTimeTable extends Table with SupportsRead {
 
   override def schema(): StructType = VehiclePositionSchema.getSchema()
 
-  override def capabilities(): util.Set[TableCapability] = Set(TableCapability.MICRO_BATCH_READ).asJava
+  override def capabilities(): util.Set[TableCapability] = Set(
+      TableCapability.MICRO_BATCH_READ,
+      TableCapability.BATCH_READ).asJava
 
-  override def newScanBuilder(options: CaseInsensitiveStringMap): ScanBuilder = new SimpleScanBuilder()
+  override def newScanBuilder(options: CaseInsensitiveStringMap): ScanBuilder = new SimpleScanBuilder(options)
 }
 
-class SimpleScanBuilder extends ScanBuilder {
-  override def build(): Scan = new SimpleScan
+class SimpleScanBuilder(options: CaseInsensitiveStringMap) extends ScanBuilder {
+  override def build(): Scan = new SimpleScan(options)
 }
 
-class SimpleScan extends Scan {
+class SimpleScan(options: CaseInsensitiveStringMap) extends Scan {
+  val url = options.get("gtfsRealtime.url")
   override def readSchema(): StructType = VehiclePositionSchema.getSchema()
 
-  override def toMicroBatchStream(checkpointLocation: String): MicroBatchStream = new SimpleMicroBatchStream()
+  override def toMicroBatchStream(checkpointLocation: String): MicroBatchStream = new SimpleMicroBatchStream(url: String)
+
+  override def toBatch(): Batch = new SimpleBatch(url: String)
 }
 
 class SimpleOffset(value: Int) extends Offset {
   override def json(): String = s"""{"value":"$value"}"""
 }
 
-class SimpleMicroBatchStream extends MicroBatchStream {
+class SimpleMicroBatchStream(url: String) extends MicroBatchStream {
   var latestOffsetValue = 0
 
   override def latestOffset(): Offset = {
@@ -57,7 +62,7 @@ class SimpleMicroBatchStream extends MicroBatchStream {
 
   override def planInputPartitions(offset: Offset, offset1: Offset): Array[InputPartition] = Array(new SimplePartition)
 
-  override def createReaderFactory(): PartitionReaderFactory = new GTFSRTPartitionReaderFactory()
+  override def createReaderFactory(): PartitionReaderFactory = new GTFSRTPartitionReaderFactory(url)
 
   override def initialOffset(): Offset = new SimpleOffset(latestOffsetValue)
 
@@ -68,21 +73,26 @@ class SimpleMicroBatchStream extends MicroBatchStream {
   override def stop(): Unit = {}
 }
 
+class SimpleBatch(url: String) extends Batch {
+  override def planInputPartitions(): Array[InputPartition] = Array(new SimplePartition)
+
+  override def createReaderFactory(): PartitionReaderFactory = new GTFSRTPartitionReaderFactory(url)
+}
 
 class SimplePartition extends InputPartition
 
-class GTFSRTPartitionReaderFactory extends PartitionReaderFactory {
-  override def createReader(partition: InputPartition): PartitionReader[InternalRow] = new GTFSRTPartitionReader
+class GTFSRTPartitionReaderFactory(url: String) extends PartitionReaderFactory {
+  override def createReader(partition: InputPartition): PartitionReader[InternalRow] = new GTFSRTPartitionReader(url)
 }
 
-class GTFSRTPartitionReader extends PartitionReader[InternalRow] {
+class GTFSRTPartitionReader(url: String) extends PartitionReader[InternalRow] {
 
   var iterator: Iterator[FeedEntity] = null
 
   def next: Boolean = {
     if (iterator == null) {
-      val url = new URL("https://km.bus-vision.jp/realtime/sankobus_vpos_update.bin")
-      val feed = FeedMessage.parseFrom(url.openStream())
+      val u = new URL(url)
+      val feed = FeedMessage.parseFrom(u.openStream())
       val entityList = feed.getEntityList
       iterator = entityList.iterator().asScala
     }
@@ -95,7 +105,7 @@ class GTFSRTPartitionReader extends PartitionReader[InternalRow] {
       val vp = VehiclePositionConverter(entity.getVehicle).toSeq
       InternalRow.fromSeq(vp)
     } else {
-      InternalRow()
+      InternalRow.empty
     }
     row
   }
